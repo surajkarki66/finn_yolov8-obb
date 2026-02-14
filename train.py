@@ -40,6 +40,11 @@ def parse_args():
     p.add_argument("--name", type=str, default="train")
     p.add_argument("--no-ema", action="store_true", help="Disable EMA (exponential moving average) of model")
     p.add_argument(
+        "--fresh-ema",
+        action="store_true",
+        help="Do not load EMA from checkpoint; start EMA from current model (default for QAT with pretrained).",
+    )
+    p.add_argument(
         "--freeze",
         type=str,
         default=None,
@@ -221,12 +226,14 @@ def main():
     scaler = amp.GradScaler(enabled=use_amp)
     if use_amp:
         print("Using mixed precision (AMP)")
-    if ema is not None and ckpt_ema is not None and not args.fresh_ema:
+    # QAT with pretrained: model layout differs from FP checkpoint, so use fresh EMA unless overridden
+    use_fresh_ema = args.fresh_ema or (args.train_quant_scales and args.weights)
+    if ema is not None and ckpt_ema is not None and not use_fresh_ema:
         ema.ema.load_state_dict(ckpt_ema, strict=False)
         ema.updates = ckpt_updates
         print(f"Loaded EMA from checkpoint (updates={ckpt_updates})")
-    elif ema is not None and ckpt_ema is not None and args.fresh_ema:
-        print("Starting with fresh EMA (--fresh-ema: ignoring checkpoint EMA)")
+    elif ema is not None and ckpt_ema is not None and use_fresh_ema:
+        print("Starting with fresh EMA (QAT with pretrained or --fresh-ema)")
     save_dir = Path(args.project) / args.name
     save_dir.mkdir(parents=True, exist_ok=True)
     results_csv = save_dir / "results.csv"
@@ -357,3 +364,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

@@ -141,7 +141,9 @@ def main():
     data = load_data_yaml(args.data)
     model = OBBModel(args.cfg, ch=3, nc=data["nc"], verbose=False)
     ckpt = torch.load(args.weights, map_location="cpu")
-    model.load_state_dict(ckpt.get("model", ckpt), strict=False)
+    # Use EMA weights if present (same as training-time validation); otherwise use raw model
+    state = ckpt.get("ema") or ckpt.get("model", ckpt)
+    model.load_state_dict(state, strict=False)
     model = model.to(device).eval()
 
     dataset = OBBDataset(img_path=data["val"], imgsz=args.imgsz, data=data, augment=False)
@@ -207,7 +209,10 @@ def main():
                 all_pred_cls.append(pred_cls)
 
         if not all_tp:
-            print("No predictions to evaluate.")
+            print(
+                "No predictions to evaluate: no detections passed the confidence threshold "
+                f"(conf={args.conf}). Try a lower threshold, e.g. --conf 0.001"
+            )
             return
 
     all_tp = np.concatenate(all_tp, axis=0)
@@ -254,3 +259,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
