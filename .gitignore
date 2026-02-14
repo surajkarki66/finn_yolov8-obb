@@ -216,3 +216,5 @@ __marimo__/
 .streamlit/secrets.toml
 
 runs/
+.DS_Store
+pretrained/*.pt
