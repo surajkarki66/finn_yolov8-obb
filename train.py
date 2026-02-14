@@ -236,8 +236,8 @@ def main():
         model.train()
         total_loss = 0.0
         running = [0.0] * 3
-        pbar = tqdm[tuple[int, Any]](
-            enumerate[Any](loader),
+        pbar = tqdm(
+            enumerate(loader),
             total=int(nb),
             desc=f"Epoch {epoch+1}/{args.epochs}",
             unit="batch",

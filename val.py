@@ -76,7 +76,7 @@ def compute_validation_metrics(model, data, device, imgsz=640, conf=0.25, iou=0.
     all_tp, all_conf, all_pred_cls = [], [], []
     all_target_cls = []
 
-    batch_iter = tqdm[Any](loader, desc="Val", unit="batch") if use_tqdm else loader
+    batch_iter = tqdm(loader, desc="Val", unit="batch") if use_tqdm else loader
     with torch.no_grad():
         for batch in batch_iter:
             im = batch["img"].to(device)
