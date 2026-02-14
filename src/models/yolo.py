@@ -65,7 +65,7 @@ def parse_model(d, ch, verbose=True):
     layers: list[nn.Module] = []
     save: list[int] = []
     c2 = ch[-1]
-    for i, (f, n, m, args) in enumerate[Any][Any](d["backbone"] + d["head"]):
+    for i, (f, n, m, args) in enumerate[Any](d["backbone"] + d["head"]):
         args = list[Any](args)
         for j, a in enumerate[Any](args):
             if isinstance(a, str) and a in ("nc", "ch", "depth", "width"):
