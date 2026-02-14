@@ -117,7 +117,7 @@ def main():
         save_dir.mkdir(parents=True, exist_ok=True)
         print(f"Saving to {save_dir}")
 
-    for path in tqdm[Any](files, desc="Predicting"):
+    for path in tqdm(files, desc="Predicting"):
         img = cv2.imread(str(path))
         if img is None:
             continue
