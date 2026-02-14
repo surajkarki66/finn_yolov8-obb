@@ -280,7 +280,7 @@ class QuantOBB(nn.Module):
         return torch.cat([y, angle], 1), (x, angle)
 
     def bias_init(self):
-        for a, b, s in zip[tuple[Module, Module, Tensor]](self.cv2, self.cv3, self.stride):
+        for a, b, s in zip(self.cv2, self.cv3, self.stride):
             a[-1].bias.data[:] = 1.0
             b[-1].bias.data[: self.nc] = math.log(5 / self.nc / (640 / s) ** 2)
 
