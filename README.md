@@ -1,4 +1,4 @@
-# YOLOv8-OBB (standalone)
+# YOLOv8-OBB
 
 Standalone PyTorch implementation for **YOLOv8 Oriented Bounding Box (OBB)** training, validation, inference, and quantization. It follows the same architecture and loss as Ultralytics YOLOv8-OBB but **does not depend on the ultralytics package** — all code is self-contained for full control and customization.
 
