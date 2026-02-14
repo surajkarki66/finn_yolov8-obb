@@ -22,7 +22,7 @@ from torch.utils.data import DataLoader
 from src.models.yolo import OBBModel
 from src.utils.dataset import OBBDataset
 from src.utils.loss import load_hyp
-from .val import compute_validation_metrics
+from val import compute_validation_metrics
 from src.utils.torch_utils import intersect_dicts, strip_optimizer, ModelEMA, one_cycle
 
 
