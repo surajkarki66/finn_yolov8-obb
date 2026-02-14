@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-Validate YOLOv8-OBB
+Test YOLOv8-OBB (standalone evaluation on test set)
 Computes: Precision, Recall, mAP50, mAP50-95 using probiou for OBB.
+Uses the 'test' split from data.yaml. For validation during training, train.py uses 'val'.
 
 Usage:
   python val.py --weights runs/obb/train/last.pt --data path/to/data.yaml
@@ -34,30 +35,32 @@ def parse_args():
     p.add_argument("--conf", type=float, default=0.25)
     p.add_argument("--iou", type=float, default=0.45)
     p.add_argument("--project", type=str, default="runs/yolov8-obb")
-    p.add_argument("--name", type=str, default="val")
+    p.add_argument("--name", type=str, default="test")
     p.add_argument("--save-json", action="store_true", help="Save metrics to project/name/metrics.json")
     return p.parse_args()
 
 
 def load_data_yaml(path):
+    """Load data.yaml and return dict with test image paths (key 'val' for compatibility with compute_validation_metrics)."""
     import yaml
     with open(path) as f:
         d = yaml.safe_load(f)
     root = Path(d.get("path", Path(path).parent))
-    val = d.get("val")
-    if val is None:
-        raise KeyError("data.yaml must contain 'val' key (validation path)")
-    if isinstance(val, str):
-        val = [str(root / val)]
-    elif isinstance(val, list):
-        val = [str(root / x) for x in val]
+    test = d.get("test")
+    if test is None:
+        raise KeyError("data.yaml must contain 'test' key for standalone testing (validation during training uses 'val')")
+    if isinstance(test, str):
+        test = [str(root / test)]
+    elif isinstance(test, list):
+        test = [str(root / x) for x in test]
     names = d.get("names", {})
     if isinstance(names, list):
         names = dict[int, Any](enumerate[Any](names))
     nc = d.get("nc")
     if nc is None:
         nc = len(names) if names else 80
-    return {"val": val, "nc": int(nc), "names": names}
+    # Use key "val" so compute_validation_metrics and OBBDataset get the same dict shape
+    return {"val": test, "nc": int(nc), "names": names}
 
 
 def compute_validation_metrics(model, data, device, imgsz=640, conf=0.25, iou=0.45, batch_size=8, use_tqdm=False):
@@ -152,7 +155,7 @@ def main():
     all_target_cls = []
 
     with torch.no_grad():
-        for batch in tqdm(loader, desc="Val", unit="batch"):
+        for batch in tqdm(loader, desc="Test", unit="batch"):
             im = batch["img"].to(device)
             pred = model(im)[0]
             pred = non_max_suppression(
@@ -213,7 +216,7 @@ def main():
     all_target_cls = np.array(all_target_cls, dtype=int)
 
     if len(all_target_cls) == 0:
-        print("No ground truth labels in validation set.")
+        print("No ground truth labels in test set.")
         return
 
     precision, recall, mAP50, mAP50_95, _, _ = ap_per_class(
@@ -221,7 +224,7 @@ def main():
     )
 
     print("\n" + "=" * 60)
-    print("OBB Validation metrics (probiou)")
+    print("OBB Test metrics (probiou)")
     print("=" * 60)
     print(f"  Precision:    {precision:.4f}")
     print(f"  Recall:       {recall:.4f}")
