@@ -167,5 +167,9 @@ def dist2rbox(pred_dist, pred_angle, anchor_points, dim=-1):
     cos, sin = torch.cos(pred_angle), torch.sin(pred_angle)
     xf, yf = ((rb - lt) / 2).split(1, dim=dim)
     x, y = xf * cos - yf * sin, xf * sin + yf * cos
-    xy = torch.cat([x, y], dim=dim) + anchor_points
+    xy = torch.cat([x, y], dim=dim)
+    # When dim=1, xy is (1, 2, N); anchor_points from make_anchors is (1, N, 2). Transpose to add.
+    if dim == 1 and anchor_points.dim() == 3 and anchor_points.shape[1] != xy.shape[1]:
+        anchor_points = anchor_points.permute(0, 2, 1)  # (1, N, 2) -> (1, 2, N)
+    xy = xy + anchor_points
     return torch.cat([xy, lt + rb], dim=dim)
