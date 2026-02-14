@@ -79,7 +79,7 @@ def parse_model(d, ch, verbose=True):
             m = getattr(torch.nn, m[3:])
         else:
             orig_m_name = m
-            m = globals().get[Any](m)
+            m = globals().get(m)
             if m is None and orig_m_name in ("QuantConv", "QuantC2f", "QuantSPPF", "QuantOBB"):
                 raise RuntimeError(
                     "Quantized config is used but QAT modules failed to load. "
