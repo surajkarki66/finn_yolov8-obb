@@ -240,6 +240,9 @@ def main():
     best_fitness = -float("inf")
 
     for epoch in range(args.epochs):
+        # Step scheduler at start of epoch (after previous epoch's optimizer steps) to avoid PyTorch warning
+        if epoch > 0:
+            scheduler.step()
         model.train()
         total_loss = 0.0
         running = [0.0] * 3
@@ -353,8 +356,6 @@ def main():
             "lr/pg0": round(current_lr, 6),
         }
         save_metrics(results_csv, epoch, row_metrics)
-
-        scheduler.step()
 
     # Strip optimizer so final checkpoints are actual model size
     strip_optimizer(save_dir / "best.pt", half=True)
