@@ -3,4 +3,4 @@
 
 # QAT
 #python3 train.py --cfg configs/models/quant/quantyolov8_obb_4w4a_common_act.yaml --data data/data.yaml --weights ./best.pt --epochs 400 --batch 32 --imgsz 416 --hyp configs/hyp/hyp.yaml --project runs/yolov8-obb-quant-4w4a --train-quant-scales --fresh-ema
-python3 train.py --cfg configs/models/quant/quantyolov8_obb_8w8a_common_act.yaml --data data/data.yaml --weights ./best.pt --epochs 400 --batch 32 --imgsz 416 --hyp configs/hyp/hyp.yaml --project runs/yolov8-obb-quant-8w8a --train-quant-scales --fresh-ema
+python3 train.py --cfg configs/models/quant/quantyolov8_obb_8w8a_common_act.yaml --data data/data.yaml --weights ./best.pt --epochs 400 --batch 32 --imgsz 416 --hyp configs/hyp/hyp.yaml --project runs/yolov8-obb-quant-8w8a --train-quant-scales --fresh-ema --no-amp
