@@ -13,6 +13,7 @@ from torch.utils.data import DataLoader
 
 from src.models.yolo import OBBModel
 from src.utils.dataset import OBBDataset
+from src.utils.metrics import fitness
 from src.utils.loss import load_hyp
 from val import compute_validation_metrics
 from src.utils.torch_utils import intersect_dicts, strip_optimizer, ModelEMA, one_cycle
@@ -292,7 +293,7 @@ def main():
         if ema is not None:
             ema.update_attr(model, include=("nc", "args"))
 
-        # Fitness: use mAP50 when validation exists, else use negative loss (higher = better)
+        # Fitness: use weighted [P, R, mAP50, mAP50_95] like reference, else use negative loss (higher = better)
         metrics = None
         if data.get("val"):
             val_paths = data["val"]
@@ -302,9 +303,21 @@ def main():
             metrics = compute_validation_metrics(
                 eval_model, data_val, device, imgsz=args.imgsz, batch_size=args.batch, use_tqdm=True
             )
-            fitness = float(metrics["mAP50"]) if metrics else -avg_loss
+            if metrics:
+                metric_vec = np.array(
+                    [[
+                        float(metrics.get("precision", 0.0)),
+                        float(metrics.get("recall", 0.0)),
+                        float(metrics.get("mAP50", 0.0)),
+                        float(metrics.get("mAP50_95", 0.0)),
+                    ]],
+                    dtype=np.float32,
+                )
+                fi = float(fitness(metric_vec)[0])
+            else:
+                fi = -avg_loss
         else:
-            fitness = -avg_loss
+            fi = -avg_loss
 
         save_state = model.state_dict()
         save_ema = ema.ema.state_dict() if ema is not None else None
@@ -314,8 +327,8 @@ def main():
             ckpt["ema"] = save_ema
             ckpt["updates"] = save_updates
         torch.save(ckpt, save_dir / "last.pt")
-        if fitness > best_fitness:
-            best_fitness = fitness
+        if fi > best_fitness:
+            best_fitness = fi
             torch.save(ckpt, save_dir / "best.pt")
 
         # End-of-epoch line: train loss + validation metrics
@@ -328,7 +341,7 @@ def main():
                 f"  val  mAP50={metrics['mAP50']:.4f}  mAP50-95={metrics['mAP50_95']:.4f}  "
                 f"precision={metrics['precision']:.3f}  recall={metrics['recall']:.3f}"
             )
-            best_mark = "  (best)" if fitness >= best_fitness else ""
+            best_mark = "  (best)" if fi >= best_fitness else ""
             print(train_part + val_part + best_mark)
         else:
             print(train_part)

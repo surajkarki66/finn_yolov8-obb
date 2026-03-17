@@ -2,6 +2,11 @@ import math
 import torch
 import numpy as np
 
+def fitness(x):
+    # Model fitness as a weighted combination of metrics
+    w = [0.0, 0.0, 0.1, 0.9]  # weights for [P, R, mAP@0.5, mAP@0.5:0.95]
+    return (x[:, :4] * w).sum(1)
+
 def _get_covariance_matrix(boxes):
     gbbs = torch.cat((torch.pow(boxes[:, 2:4], 2) / 12, boxes[:, 4:]), dim=-1)
     a, b, c = gbbs.split(1, dim=-1)
