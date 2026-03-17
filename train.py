@@ -39,7 +39,7 @@ def parse_args():
     p.add_argument(
         "--optimizer",
         type=str,
-        default="sgd",
+        default="adamw",
         choices=("sgd", "adam", "adamw"),
         help="Optimizer type.",
     )
@@ -293,6 +293,10 @@ def main():
     )
 
     momentum = getattr(hyp, "momentum", 0.937)
+    nb = len(loader)
+    base_accumulate = max(round(args.nominal_batch / args.batch), 1)  # gradient accumulation steps
+    # Scale weight_decay by accumulation factor (reference behavior)
+    hyp.weight_decay *= args.batch * base_accumulate / args.nominal_batch
     opt = build_optimizer(model, hyp, args.optimizer)
     # LR scheduler: linear or cosine decay to lr0 * lrf
     cos_lr = getattr(hyp, "cos_lr", False) or args.cos_lr
@@ -304,8 +308,6 @@ def main():
     scheduler = torch.optim.lr_scheduler.LambdaLR(opt, lr_lambda=lf)
     if start_epoch > 0:
         scheduler.last_epoch = start_epoch - 1
-    nb = len(loader)
-    base_accumulate = max(round(args.nominal_batch / args.batch), 1)
     warmup_epochs = getattr(hyp, "warmup_epochs", 3.0)
     nw = max(round(warmup_epochs * nb), 100) if warmup_epochs > 0 else -1
     warmup_momentum = getattr(hyp, "warmup_momentum", 0.8)
@@ -400,7 +402,7 @@ def main():
                         loss, loss_items = model.loss(batch)
                 else:
                     raise
-            scaler.scale(loss / accumulate).backward()
+            scaler.scale(loss).backward()
             if ((ni + 1) % accumulate == 0) or (bi == nb - 1):
                 scaler.step(opt)
                 scaler.update()
