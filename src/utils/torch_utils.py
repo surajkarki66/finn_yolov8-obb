@@ -101,17 +101,13 @@ def strip_optimizer(
     if "model" not in ckpt:
         print(f"Skipping {f}, no 'model' key.")
         return
-    model = ckpt["model"]
-    if isinstance(model, nn.Module):
-        # Full module: prefer EMA if present
-        if ckpt.get("ema") is not None:
-            model = ckpt["ema"]
-            if isinstance(model, nn.Module):
-                model = model.module if hasattr(model, "module") else model
-        state = model.state_dict()
-        nc = getattr(model, "nc", ckpt.get("nc"))
+    model_or_state = ckpt.get("ema") if ckpt.get("ema") is not None else ckpt["model"]
+    if isinstance(model_or_state, nn.Module):
+        model_or_state = model_or_state.module if hasattr(model_or_state, "module") else model_or_state
+        state = model_or_state.state_dict()
+        nc = getattr(model_or_state, "nc", ckpt.get("nc"))
     else:
-        state = model
+        state = model_or_state
         nc = ckpt.get("nc")
     first = next(iter(state.values()), None)
     if half and first is not None and first.dtype != torch.float16:

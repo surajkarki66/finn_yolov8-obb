@@ -99,7 +99,8 @@ def main():
     names = get_names(args.data, nc)
 
     model = OBBModel(args.cfg, ch=3, nc=nc, verbose=False)
-    raw = ckpt.get("model", ckpt)
+    # Prefer EMA weights when available (matches training-time validation behavior)
+    raw = ckpt.get("ema") or ckpt.get("model", ckpt)
     state = raw.float().state_dict() if hasattr(raw, "state_dict") else raw
     state = intersect_dicts(state, model.state_dict())
     model.load_state_dict(state, strict=False)
