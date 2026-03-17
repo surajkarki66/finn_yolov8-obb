@@ -51,6 +51,7 @@ def parse_args():
     )
     p.add_argument("--cos-lr", action="store_true", help="Use cosine LR schedule (overrides hyp cos_lr)")
     p.add_argument("--train-quant-scales", action="store_true", help="QAT: train activation quant scales (Brevitas scaling_impl)")
+    p.add_argument("--no-amp", action="store_true", help="Disable mixed precision (AMP)")
     return p.parse_args()
 
 
@@ -214,7 +215,7 @@ def main():
     )
 
     ema = ModelEMA(model) if not args.no_ema else None
-    use_amp = device.type == "cuda"
+    use_amp = device.type == "cuda" and not args.no_amp
     scaler = amp.GradScaler(enabled=use_amp)
     if use_amp:
         print("Using mixed precision (AMP)")
