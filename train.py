@@ -363,8 +363,8 @@ def main():
         save_metrics(results_csv, epoch, row_metrics)
 
     # Strip optimizer so final checkpoints are actual model size
-    strip_optimizer(save_dir / "best.pt", half=True)
-    strip_optimizer(save_dir / "last.pt", half=True)
+    strip_optimizer(save_dir / "best.pt")
+    strip_optimizer(save_dir / "last.pt")
     print(f"Saved last.pt and best.pt (stripped) to {save_dir}")
 
 

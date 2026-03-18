@@ -78,41 +78,25 @@ def intersect_dicts(da, db, exclude=()):
     return {k: v for k, v in da.items() if k in db and all(x not in k for x in exclude) and v.shape == db[k].shape}
 
 
-def strip_optimizer(
-    f: Union[str, Path] = "best.pt",
-    s: Union[str, Path] = "",
-    half: bool = True,
-) -> None:
-    """
-    Strip optimizer and extra state from a checkpoint to get actual model size.
-    Keeps only model weights and nc; optionally saves in FP16.
-
-    Args:
-        f: Path to checkpoint (e.g. best.pt or last.pt).
-        s: If set, save stripped checkpoint here; otherwise overwrite f.
-        half: If True, save model weights in FP16 to reduce size.
-    """
-    f = Path(f)
-    out = Path(s) if s else f
-    try:
-        ckpt = torch.load(f, map_location="cpu", weights_only=False)
-    except TypeError:
-        ckpt = torch.load(f, map_location="cpu")
-    if "model" not in ckpt:
-        print(f"Skipping {f}, no 'model' key.")
-        return
-    model_or_state = ckpt.get("ema") if ckpt.get("ema") is not None else ckpt["model"]
-    if isinstance(model_or_state, nn.Module):
-        model_or_state = model_or_state.module if hasattr(model_or_state, "module") else model_or_state
-        state = model_or_state.state_dict()
-        nc = getattr(model_or_state, "nc", ckpt.get("nc"))
+def strip_optimizer(f='best.pt', s=''):
+    # Strip optimizer from 'f' to finalize training, optionally save as 's'
+    x = torch.load(f, map_location=torch.device('cpu'))
+    if x.get('ema'):
+        x['model'] = x['ema']  # replace model with ema
+    for k in 'optimizer', 'training_results', 'wandb_id', 'ema', 'updates':  # keys
+        x[k] = None
+    x['epoch'] = -1
+    # Convert model weights to FP16 if it's a state dict
+    if isinstance(x['model'], dict):
+        for k, v in x['model'].items():
+            if isinstance(v, torch.Tensor) and v.dtype == torch.float32:
+                x['model'][k] = v.half()
     else:
-        state = model_or_state
-        nc = ckpt.get("nc")
-    first = next(iter(state.values()), None)
-    if half and first is not None and first.dtype != torch.float16:
-        state = {k: v.half() for k, v in state.items()}
-    stripped = {"model": state, "epoch": -1, "nc": nc}
-    torch.save(stripped, out)
-    mb = os.path.getsize(out) / 1e6
-    print(f"Stripped optimizer from {f}{f' -> {out}' if s else ''}, {mb:.1f}MB")
+        # If it's a model object, use the original approach
+        x['model'].half()  # to FP16
+        for p in x['model'].parameters():
+            p.requires_grad = False
+    torch.save(x, s or f)
+    mb = os.path.getsize(s or f) / 1E6  # filesize
+    print(f"Optimizer stripped from {f},{(' saved as %s,' % s) if s else ''} {mb:.1f}MB")
+
