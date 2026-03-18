@@ -2,9 +2,6 @@ import math
 import torch
 import torch.nn as nn
 
-from torch._tensor import Tensor
-from torch.nn.modules.module import Module
-
 from src.nn.block import DFL
 from src.nn.conv import Conv
 from src.utils.tal import dist2bbox, dist2rbox, make_anchors

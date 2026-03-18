@@ -13,7 +13,6 @@ Usage:
 
 import torch
 import argparse
-import sys
 import yaml
 
 from pathlib import Path

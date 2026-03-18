@@ -8,3 +8,4 @@ Pillow>=11.1.0
 brevitas>=0.12.1
 qonnx>=0.4.0
 onnxscript>=0.6.2
+ruff>=0.15.6

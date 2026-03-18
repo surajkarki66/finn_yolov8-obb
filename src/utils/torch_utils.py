@@ -6,8 +6,6 @@ import os
 import torch.nn as nn
 
 from copy import deepcopy
-from pathlib import Path
-from typing import Union
 
 
 
@@ -122,39 +120,3 @@ def set_params(model, decay):
                 p2.append(p)  # weight (with decay)
     return [{'params': p1, 'weight_decay': 0.00},
             {'params': p2, 'weight_decay': decay}]
-    
-class LinearLR:
-    def __init__(self, args, params, num_steps):
-        max_lr = params['max_lr']
-        min_lr = params['min_lr']
-
-        total_steps = args.epochs * num_steps
-
-        warmup_steps = int(max(params['warmup_epochs'] * num_steps, 100))
-        # Prevent Warmup from exceeding Total Steps ---
-        if warmup_steps >= total_steps:
-            # If total training is shorter than defined warmup, 
-            # we limit warmup to a fraction (e.g., 10%) of the total run
-            # or just total_steps - 1 to prevent negative decay.
-            print(f"Warning: Warmup steps ({warmup_steps}) > Total steps ({total_steps}). Adjusting warmup.")
-            warmup_steps = int(total_steps * 0.1)
-
-        # Ensure warmup is at least 0
-        warmup_steps = max(warmup_steps, 0)
-        
-        decay_steps = int(args.epochs * num_steps - warmup_steps)
-        print("warmup_steps: ", warmup_steps)
-        print("decay_steps: ", decay_steps)
-
-        warmup_lr = np.linspace(min_lr, max_lr, int(warmup_steps), endpoint=False)
-        decay_lr = np.linspace(max_lr, min_lr, decay_steps)
-
-        self.total_lr = np.concatenate((warmup_lr, decay_lr))
-
-    def step(self, step, optimizer):
-        for param_group in optimizer.param_groups:
-            # Safety check to prevent index out of bounds if training runs long
-            if step < len(self.total_lr):
-                param_group['lr'] = self.total_lr[step]
-            else:
-                param_group['lr'] = self.total_lr[-1]

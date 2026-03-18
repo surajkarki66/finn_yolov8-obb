@@ -159,7 +159,7 @@ class BaseModel(nn.Module):
             return self.loss(x, *args, **kwargs)
         return self.predict(x, *args, **kwargs)
 
-    def predict(self, x, profile=False, visualize=False):
+    def predict(self, x):
         return self._predict_once(x)
 
     def _predict_once(self, x):
@@ -197,7 +197,9 @@ class DetectionModel(BaseModel):
         if isinstance(m, OBB) or (isinstance(m, QuantOBB)):
             s = 256
             m.inplace = self.inplace
-            forward = lambda x: self.forward(x)[0]
+            def forward(x):
+                return self.forward(x)[0]
+
             m.stride = torch.tensor([s / x.shape[-2] for x in forward(torch.zeros(1, ch, s, s))])
             self.stride = m.stride
             m.bias_init()

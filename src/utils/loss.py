@@ -144,7 +144,6 @@ def _default_hyp():
         lrf = 0.01
         momentum = 0.937
         weight_decay = 0.0005
-        cos_lr = False
         # Warmup
         warmup_epochs = 3.0
         warmup_momentum = 0.8

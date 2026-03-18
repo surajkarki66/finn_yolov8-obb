@@ -5,7 +5,6 @@ from typing import Any
 import torch
 import argparse
 import numpy as np
-import cv2
 
 from pathlib import Path
 from tqdm import tqdm
