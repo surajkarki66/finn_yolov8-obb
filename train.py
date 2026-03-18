@@ -46,9 +46,8 @@ def parse_args():
         "--hyp",
         type=str,
         default="configs/hyp/hyp.yaml",
-        help="Path to hyperparameters YAML (box, cls, dfl, lr0, weight_decay, lrf, cos_lr). Overrides defaults.",
+        help="Path to hyperparameters YAML (box, cls, dfl, lr0, weight_decay, lrf). Overrides defaults.",
     )
-    p.add_argument("--cos-lr", action="store_true", help="Use cosine LR schedule (overrides hyp cos_lr)")
     p.add_argument("--train-quant-scales", action="store_true", help="QAT: train activation quant scales (Brevitas scaling_impl)")
     return p.parse_args()
 
