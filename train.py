@@ -5,18 +5,18 @@ from typing import Any
 import torch
 import argparse
 import numpy as np
+import cv2
 
 from pathlib import Path
 from tqdm import tqdm
-from torch.cuda import amp
 from torch.utils.data import DataLoader
 
 from src.models.yolo import OBBModel
-from src.utils.dataset import OBBDataset
+from src.utils.dataset import OBBDataset, preflight_dataset_checks
 from src.utils.metrics import fitness
 from src.utils.loss import load_hyp
 from val import compute_validation_metrics
-from src.utils.torch_utils import intersect_dicts, strip_optimizer, ModelEMA, one_cycle
+from src.utils.torch_utils import intersect_dicts, strip_optimizer, ModelEMA, clip_gradients, set_params
 
 
 def parse_args():
@@ -51,7 +51,6 @@ def parse_args():
     )
     p.add_argument("--cos-lr", action="store_true", help="Use cosine LR schedule (overrides hyp cos_lr)")
     p.add_argument("--train-quant-scales", action="store_true", help="QAT: train activation quant scales (Brevitas scaling_impl)")
-    p.add_argument("--no-amp", action="store_true", help="Disable mixed precision (AMP)")
     return p.parse_args()
 
 
@@ -107,8 +106,6 @@ def move_brevitas_buffers_to_device(model, device):
 def freeze_layers(model, freeze_arg):
     """
     Freeze model parameters by name.
-    - always_freeze: params whose name contains '.dfl'
-    - freeze_arg: None, or int (freeze first n layers), or comma-separated indices (e.g. '0,1,2')
     """
     always_freeze_names = [".dfl"]
     if freeze_arg is None or (isinstance(freeze_arg, str) and freeze_arg.strip() == ""):
@@ -128,7 +125,6 @@ def freeze_layers(model, freeze_arg):
             print(f"  Freezing '{k}'")
     if n_frozen:
         print(f"Frozen {n_frozen} parameter groups (including .dfl)")
-
 
 def main():
     args = parse_args()
@@ -180,6 +176,7 @@ def main():
         data=data,
         augment=True,
     )
+    preflight_dataset_checks(dataset, nc)
     loader = DataLoader[Any](
         dataset,
         batch_size=args.batch,
@@ -189,34 +186,39 @@ def main():
         collate_fn=OBBDataset.collate_fn,
     )
 
+    accumulate = max(round(64 / args.batch), 1)
+    scaled_wd = hyp.weight_decay * args.batch * accumulate / 64
     momentum = getattr(hyp, "momentum", 0.937)
-    opt = torch.optim.AdamW(
-        model.parameters(),
-        lr=hyp.lr0,
-        betas=(momentum, 0.999),
-        weight_decay=hyp.weight_decay,
+    min_lr = hyp.lr0 * getattr(hyp, "lrf", 0.01)
+    max_lr = hyp.lr0
+    opt = torch.optim.SGD(set_params(model, scaled_wd), lr=min_lr, momentum=momentum, nesterov=True)
+    no_decay_count = len(opt.param_groups[0]["params"])
+    decay_count = len(opt.param_groups[1]["params"])
+    print(
+        f"Optimizer: SGD start_lr={min_lr} target_lr={max_lr} momentum={momentum} nesterov=True  "
+        f"groups(no_decay/decay)=({no_decay_count}/{decay_count})  weight_decay={scaled_wd:.6g}"
     )
-    # LR scheduler: linear or cosine decay to lr0 * lrf
-    cos_lr = getattr(hyp, "cos_lr", False) or args.cos_lr
-    lrf = getattr(hyp, "lrf", 0.01)
-    if cos_lr:
-        lf = one_cycle(1, lrf, args.epochs)
-    else:
-        lf = lambda x: max(1 - x / args.epochs, 0) * (1.0 - lrf) + lrf
-    scheduler = torch.optim.lr_scheduler.LambdaLR(opt, lr_lambda=lf)
     nb = len(loader)
     warmup_epochs = getattr(hyp, "warmup_epochs", 3.0)
-    nw = max(round(warmup_epochs * nb), 100) if warmup_epochs > 0 else -1
-    warmup_momentum = getattr(hyp, "warmup_momentum", 0.8)
-    warmup_bias_lr = getattr(hyp, "warmup_bias_lr", 0.1)
+    total_steps = max(args.epochs * nb, 1)
+    nw = max(round(warmup_epochs * nb), 100) if warmup_epochs > 0 else 0
+    if nw >= total_steps:
+        nw = int(total_steps * 0.1)
+    nw = max(nw, 0)
+    decay_steps = max(total_steps - nw, 1)
+    warmup_lr = np.linspace(min_lr, max_lr, nw, endpoint=False) if nw > 0 else np.array([], dtype=np.float32)
+    decay_lr = np.linspace(max_lr, min_lr, decay_steps)
+    total_lr = np.concatenate((warmup_lr, decay_lr))
     print(
-        f"LR scheduler: {'cosine' if cos_lr else 'linear'}  lr0={hyp.lr0}  lrf={lrf}  final_lr={hyp.lr0 * lrf:.2e}  "
-        f"warmup={nw} iters (warmup_epochs={warmup_epochs})"
+        f"LR scheduler: linear-step  max_lr={max_lr}  min_lr={min_lr}  "
+        f"warmup={nw} steps  total_steps={total_steps}"
     )
+    print(f"Stability: accumulate={accumulate}")
 
     ema = ModelEMA(model) if not args.no_ema else None
-    use_amp = device.type == "cuda" and not args.no_amp
-    scaler = amp.GradScaler(enabled=use_amp)
+    use_amp = device.type == "cuda"
+    amp_device = "cuda" if device.type == "cuda" else "cpu"
+    scaler = torch.amp.GradScaler(amp_device, enabled=use_amp)
     if use_amp:
         print("Using mixed precision (AMP)")
     # QAT with pretrained: model layout differs from FP checkpoint, so use fresh EMA unless overridden
@@ -233,9 +235,6 @@ def main():
     best_fitness = -float("inf")
 
     for epoch in range(args.epochs):
-        # Step scheduler at start of epoch (after previous epoch's optimizer steps) to avoid PyTorch warning
-        if epoch > 0:
-            scheduler.step()
         model.train()
         total_loss = 0.0
         running = [0.0] * 3
@@ -246,34 +245,42 @@ def main():
             unit="batch",
             leave=True,
         )
+        opt.zero_grad(set_to_none=True)
         for bi, batch in pbar:
             ni = bi + epoch * nb  # global iteration index
-            # Warmup: interpolate lr and momentum over first nw iters
-            if ni < nw:
-                xi = [0, nw]
-                target_lr = hyp.lr0 * lf(epoch)
-                for g in opt.param_groups:
-                    g["lr"] = np.interp(ni, xi, [warmup_bias_lr, target_lr])
-                    g["betas"] = (np.interp(ni, xi, [warmup_momentum, momentum]), 0.999)
+            # Step-wise linear LR schedule (equivalent to scheduler.step(step, optimizer)).
+            lr_step = min(ni, len(total_lr) - 1)
+            for g in opt.param_groups:
+                g["lr"] = float(total_lr[lr_step])
             for k in ("img", "cls", "bboxes", "batch_idx"):
                 batch[k] = batch[k].to(device, non_blocking=True)
-            opt.zero_grad()
             try:
-                with amp.autocast(enabled=use_amp):
+                with torch.amp.autocast(amp_device, enabled=use_amp):
                     loss, loss_items = model.loss(batch)
             except RuntimeError as e:
                 if "same device" in str(e) or "different devices" in str(e):
                     move_brevitas_buffers_to_device(model, device)
                     model = model.to(device)
-                    with amp.autocast(enabled=use_amp):
+                    with torch.amp.autocast(amp_device, enabled=use_amp):
                         loss, loss_items = model.loss(batch)
                 else:
                     raise
+
             scaler.scale(loss).backward()
-            scaler.step(opt)
-            scaler.update()
-            if ema is not None:
-                ema.update(model)
+
+            # Match reference behavior: global-step modulo accumulation triggers update,
+            # including a possible optimizer step on the first iteration (ni == 0).
+            do_step = (ni % accumulate == 0)
+            if do_step:
+                scaler.unscale_(opt)
+                clip_gradients(model)
+                scaler.step(opt)
+                scaler.update()
+                opt.zero_grad(set_to_none=True)
+                if ema is not None:
+                    ema.update(model)
+            if device.type == "cuda":
+                torch.cuda.synchronize()
             total_loss += loss.item()
             for j in range(3):
                 running[j] += loss_items[j].item()

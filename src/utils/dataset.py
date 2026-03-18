@@ -138,3 +138,68 @@ class OBBDataset(Dataset):
             else:
                 out[k] = v
         return out
+
+
+def preflight_dataset_checks(dataset, nc):
+    """Validate image/label files before training starts."""
+    existing_images = 0
+    missing_images = 0
+    corrupt_images = 0
+    missing_labels = 0
+    invalid_labels = 0
+    valid_labels = 0
+
+    for img_path, label_path in zip(dataset.im_files, dataset.label_files):
+        ip = Path(img_path)
+        lp = Path(label_path)
+
+        if not ip.exists():
+            missing_images += 1
+            continue
+        existing_images += 1
+
+        img = cv2.imread(str(ip))
+        if img is None:
+            corrupt_images += 1
+
+        if not lp.exists():
+            missing_labels += 1
+            continue
+
+        with open(lp) as f:
+            lines = [x.strip() for x in f.readlines() if x.strip()]
+
+        file_invalid = False
+        for line in lines:
+            parts = line.split()
+            if len(parts) != 9:
+                file_invalid = True
+                break
+            try:
+                cls = float(parts[0])
+                pts = [float(x) for x in parts[1:]]
+            except ValueError:
+                file_invalid = True
+                break
+
+            if not np.isfinite(cls) or not all(np.isfinite(v) for v in pts):
+                file_invalid = True
+                break
+            if cls < 0 or cls >= nc:
+                file_invalid = True
+                break
+            if any(v < 0.0 or v > 1.0 for v in pts):
+                file_invalid = True
+                break
+
+        if file_invalid:
+            invalid_labels += 1
+        else:
+            valid_labels += 1
+
+    print(f"Number of existing image files: {existing_images}")
+    print(f"Number of missing image files: {missing_images}")
+    print(f"Number of corrupt image files: {corrupt_images}")
+    print(f"Number of missing label files: {missing_labels}")
+    print(f"Number of valid label files: {valid_labels}")
+    print(f"Number of invalid label files: {invalid_labels}")
