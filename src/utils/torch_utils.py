@@ -104,11 +104,16 @@ def clip_gradients(model, max_norm=10.0):
 def set_params(model, decay):
     p1 = []
     p2 = []
+    seen = set()
     norm = tuple(v for k, v in torch.nn.__dict__.items() if "Norm" in k)
     for m in model.modules():
         for n, p in m.named_parameters(recurse=0):
             if not p.requires_grad:
                 continue
+            pid = id(p)
+            if pid in seen:
+                continue
+            seen.add(pid)
             if n == "bias":  # bias (no decay)
                 p1.append(p)
             elif n == "weight" and isinstance(m, norm):  # norm-weight (no decay)
