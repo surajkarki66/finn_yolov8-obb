@@ -1,4 +1,4 @@
-nc: 1
+nc: 16
 scale: n  # n | s | m | l | x
 scales:
   n: [0.33, 0.25, 1024]
