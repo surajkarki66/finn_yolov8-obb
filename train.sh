@@ -50,4 +50,14 @@
 
 
 # CEPDOF
-python3 train.py --cfg configs/models/yolov8-obb.yaml --data data/CEPDOF/data.yaml --weights pretrained/yolov8n-obb.pt --epochs 300 --batch 64 --imgsz 416 --hyp configs/hyp/hyp.yaml
+#python3 train.py --cfg configs/models/yolov8-obb.yaml --data data/CEPDOF/data.yaml --weights pretrained/yolov8n-obb.pt --epochs 300 --batch 64 --imgsz 416 --hyp configs/hyp/hyp.yaml
+
+
+# WEPDTOF
+#python3 train.py --cfg configs/models/yolov8-obb.yaml --data data/WEPDTOF/data.yaml --weights pretrained/yolov8n-obb.pt --epochs 300 --batch 64 --imgsz 416 --hyp configs/hyp/hyp.yaml
+
+
+# fisheye8k
+python3 train.py --cfg configs/models/yolov8-obb.yaml --data data/fisheye8k/data.yaml --weights pretrained/yolov8n-obb.pt --epochs 300 --batch 64 --imgsz 416 --hyp configs/hyp/hyp.yaml
+
+
