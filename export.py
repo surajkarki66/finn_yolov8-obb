@@ -36,14 +36,14 @@ def main():
     p = argparse.ArgumentParser(description="Export quantized YOLOv8-OBB to QONNX for FINN")
     p.add_argument("--weights", type=str, required=True, help="Path to checkpoint (e.g. best.pt)")
     p.add_argument("--cfg", type=str, required=True, help="Model config YAML (quant config used for training)")
-    p.add_argument("--data", type=str, required=True, help="Data YAML (for nc)")
+    p.add_argument("--nc", type=str, required=True, help="Number of classes")
     p.add_argument("--input_shape", nargs=2, type=int, required=True, help="Input shape H W (e.g. 640 640)")
     p.add_argument("--load_ema", action="store_true", help="Load EMA weights from checkpoint")
     p.add_argument("--angle-legacy", action="store_true", help="Use previous angle format: 4 outputs (P3, P4, P5, angle) with sigmoid+reshape in graph. Default: 6 outputs (raw angle per scale, FINN-friendly)")
     p.add_argument("--output", type=str, default="", help="Output ONNX path (default: same dir as weights file, exported.onnx)")
     args = p.parse_args()
 
-    nc = load_data_yaml(args.data)
+    nc = args.nc
     cfg_path = Path(args.cfg)
     if not cfg_path.is_absolute():
         cfg_path = Path.cwd() / cfg_path
