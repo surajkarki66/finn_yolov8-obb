@@ -9,4 +9,4 @@
 #python3 export.py --weights runs/yolov8-obb-quant-4w2a/train/best.pt --cfg configs/models/quant/quantyolov8_obb_4w2a_common_act.yaml --nc 1 --input_shape 416 416
 
 
-python3 export.py --weights ./best.pt --cfg configs/models/quant/quantyolov8_obb_4w4a_common_act.yaml --nc 5 --input_shape 416 416 
+python3 export.py --weights runs/yolov8-obb-quant-4w4a_finetune/train/best.pt --cfg configs/models/quant/quantyolov8_obb_4w4a_common_act.yaml --nc 1 --input_shape 416 416 
