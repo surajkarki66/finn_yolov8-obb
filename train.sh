@@ -35,19 +35,7 @@
 #python3 train.py --cfg configs/models/quant/quantyolov8_obb_6w4a_common_act.yaml --data data/data.yaml --epochs 300 --batch 32 --imgsz 416 --hyp configs/hyp/hyp.yaml --project runs/yolov8-obb-quant-6w4a --train-quant-scales
 #python3 train.py --cfg configs/models/quant/quantyolov8_obb_8w8a_common_act.yaml --data data/data.yaml --epochs 300 --batch 32 --imgsz 416 --hyp configs/hyp/hyp.yaml --project runs/yolov8-obb-quant-8w8a --train-quant-scales
 
-# HABOF
-#python3 train.py --cfg configs/models/yolov8-obb.yaml --data data/HABOF/data.yaml --weights pretrained/yolov8n-obb.pt --epochs 300 --batch 64 --imgsz 416 --hyp configs/hyp/hyp.yaml
-#python3 train.py --cfg configs/models/quant/quantyolov8_obb_4w4a_common_act.yaml --data data/HABOF/data.yaml --epochs 300 --batch 32 --imgsz 416 --hyp configs/hyp/hyp.yaml --project runs/yolov8-obb-quant-4w4a --train-quant-scales
-
-# CEPDOF
-#python3 train.py --cfg configs/models/yolov8-obb.yaml --data data/CEPDOF/data.yaml --weights pretrained/yolov8n-obb.pt --epochs 300 --batch 64 --imgsz 416 --hyp configs/hyp/hyp.yaml
-#python3 train.py --cfg configs/models/quant/quantyolov8_obb_4w4a_common_act.yaml --data data/CEPDOF/data.yaml --epochs 300 --batch 32 --imgsz 416 --hyp configs/hyp/hyp.yaml --project runs/yolov8-obb-quant-4w4a --train-quant-scales
-
-# WEPDTOF
-#python3 train.py --cfg configs/models/yolov8-obb.yaml --data data/WEPDTOF/data.yaml --weights pretrained/yolov8n-obb.pt --epochs 300 --batch 64 --imgsz 416 --hyp configs/hyp/hyp.yaml
-#python3 train.py --cfg configs/models/quant/quantyolov8_obb_4w4a_common_act.yaml --data data/WEPDTOF/data.yaml --epochs 300 --batch 32 --imgsz 416 --hyp configs/hyp/hyp.yaml --project runs/yolov8-obb-quant-4w4a --train-quant-scales
-
-# fisheye8k
+# Fisheye8k
 #python3 train.py --cfg configs/models/yolov8-obb.yaml --data data/fisheye8k/data.yaml --weights pretrained/yolov8n-obb.pt --epochs 300 --batch 64 --imgsz 416 --hyp configs/hyp/hyp.yaml
 #python3 train.py --cfg configs/models/quant/quantyolov8_obb_4w4a_common_act.yaml --data data/fisheye8k/data.yaml --epochs 300 --batch 32 --imgsz 416 --hyp configs/hyp/hyp.yaml --project runs/yolov8-obb-quant-4w4a --train-quant-scales
 
