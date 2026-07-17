@@ -47,3 +47,8 @@
 python3 train.py --cfg configs/models/yolov8-obb.yaml --data data/PMOF+CEPDOF_416/data.yaml --weights pretrained/yolov8n-obb.pt --epochs 300 --batch 64 --imgsz 416 --hyp configs/hyp/hyp.yaml
 #python3 train.py --cfg configs/models/quant/quantyolov8_obb_4w4a_common_act.yaml --data data/PMOF+CEPDOF_416/data.yaml --epochs 300 --batch 32 --imgsz 416 --hyp configs/hyp/hyp.yaml --project runs/yolov8-obb-quant-4w4a_finetune --train-quant-scales --weights runs/yolov8-obb/train/best.pt
 
+
+# PMOF+CEPDOF+HABOF
+#python3 train.py --cfg configs/models/yolov8-obb.yaml --data data/PMOF+CEPDOF+HABOF_416/data.yaml --weights pretrained/yolov8n-obb.pt --epochs 300 --batch 64 --imgsz 416 --hyp configs/hyp/hyp.yaml --project runs/yolov8-obb_finetune_pmof+cepdof+habof
+#python3 train.py --cfg configs/models/quant/quantyolov8_obb_4w4a_common_act.yaml --data data/PMOF+CEPDOF+HABOF_416/data.yaml --epochs 300 --batch 32 --imgsz 416 --hyp configs/hyp/hyp.yaml --project runs/yolov8-obb-quant-4w4a_finetune_pmof+cepdof+habof --train-quant-scales --weights runs/yolov8-obb/train/best.pt
+
