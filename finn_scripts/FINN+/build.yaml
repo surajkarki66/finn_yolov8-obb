@@ -1,8 +1,11 @@
-# FINN+ build configuration for YOLOv8-OBB
+# Build configuration
 
 # Board settings
-board: ZCU104
-shell_flow_type: vivado_zynq
+board: U250
+shell_flow_type: vitis_alveo
+vitis_platform: xilinx_u250_gen3x16_xdma_4_1_202210_1
+
+stitched_ip_gen_dcp: true
 
 # Synthesis settings
 synth_clk_period_ns: 10.0
@@ -13,9 +16,10 @@ generate_outputs:
   - estimate_reports
   - bitfile
   - pynq_driver
+  - stitched_ip
   - deployment_package
-
-output_dir: yolov8_obb_4w4a_416
+  
+output_dir: outputs_yolov8n_pmof
 
 # Steps to execute
 steps:
@@ -32,6 +36,7 @@ steps:
   - step_hw_ipgen
   - step_set_fifo_depths
   - step_create_stitched_ip
+  - custom_steps.step_slr_floorplan
   - step_measure_rtlsim_performance
   - step_out_of_context_synthesis
   - step_synthesize_bitfile
@@ -45,7 +50,7 @@ default_swg_exception: false
 enable_instrumentation: false
 fifosim_input_throttle: true
 fifosim_save_waveform: false
-folding_config_file: null
+#folding_config_file: None
 folding_two_pass_relaxation: true
 fpga_memory: default
 hls_clk_period_ns: 10.0
@@ -55,7 +60,8 @@ max_multithreshold_bit_width: 8
 minimize_bit_width: true
 mvau_wwidth_max: 36
 save_intermediate_models: true
-specialize_layers_config_file: null
+#specialize_layers_config_file: None
 split_large_fifos: true
-standalone_thresholds: true
+standalone_thresholds: false
 verbose: true
+vitis_opt_strategy: '0' # Default
