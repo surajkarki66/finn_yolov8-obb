@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import math
+import time
 from pathlib import Path
 
 import cv2
@@ -80,6 +81,20 @@ BOX_BRANCH_IDX = [1, 3, 5]
 
 
 class FINNXRT:
+    """
+    Hardened version of the original FINNXRT:
+      - usable as a context manager (`with FINNXRT(...) as finn:`) so
+        device/kernel handles are always released, even on exception
+      - BOs allocated once in __init__ and reused across execute() calls
+        instead of allocated fresh per image (lower per-call overhead)
+      - bounded wait on each DMA run (default 15s) instead of an
+        unbounded run.wait(), so a stalled/deadlocked CU (e.g. from a
+        thermal/power clock-stop event -- check `dmesg` for "Critical
+        temperature or power event" / "Card requires pci hot reset")
+        raises a clear TimeoutError instead of hanging the process
+        forever and leaving handles open for the next invocation to
+        inherit a wedged device.
+    """
 
     def __init__(
         self,
@@ -88,6 +103,7 @@ class FINNXRT:
         input_kernel_name="StreamingDataflowPartition_0",
         output_kernel_names=None,
         device_id=0,
+        run_timeout_s=15.0,
     ):
 
         if output_kernel_names is None:
@@ -102,6 +118,14 @@ class FINNXRT:
 
         self.io_shape_dict = io_shape_dict
         self.output_kernel_names = output_kernel_names
+        self.last_fpga_latency_ms = None
+        self.run_timeout_s = run_timeout_s
+
+        self.device = None
+        self.idma0 = None
+        self.odma_kernels = []
+        self._ibuf_bo = None
+        self._obuf_bos = []
 
         print("Opening device")
         self.device = pyxrt.device(device_id)
@@ -117,10 +141,41 @@ class FINNXRT:
             for kernel_name in self.output_kernel_names
         ]
 
+        # Pre-allocate BOs once; reused across every execute() call.
+        ibuf_packed_size = int(np.prod(self.ishape_packed(0)))
+        self._ibuf_bo = self.alloc_bo(ibuf_packed_size, self.idma0, 0)
+
+        out_packed_sizes = [
+            int(np.prod(self.oshape_packed(i)))
+            for i in range(self.io_shape_dict["num_outputs"])
+        ]
+        self._obuf_bos = [
+            self.alloc_bo(size, self.odma_kernels[i], 0)
+            for i, size in enumerate(out_packed_sizes)
+        ]
+        self._out_packed_sizes = out_packed_sizes
+
         print("FINN accelerator ready")
 
-    def alloc_bo(self, size):
-        return pyxrt.bo(self.device, int(size), pyxrt.bo.normal, 0)
+    # ---- context manager: guarantees cleanup on exit or exception ----
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+        return False  # never swallow exceptions
+
+    def close(self):
+        """Best-effort release of native handles. Safe to call multiple times."""
+        self._ibuf_bo = None
+        self._obuf_bos = []
+        self.odma_kernels = []
+        self.idma0 = None
+        self.device = None
+        print("FINNXRT: device handles released")
+
+    def alloc_bo(self, size, kernel, argno=0):
+        return pyxrt.bo(self.device, int(size), pyxrt.bo.normal, kernel.group_id(argno))
 
     def copy_to_bo(self, bo, data_bytes):
         mapped = bo.map()
@@ -185,35 +240,75 @@ class FINNXRT:
     def unfold_output(self, obuf_folded, ind=0):
         return obuf_folded.reshape(self.oshape_normal(ind))
 
+    # ---- bounded wait, tolerant of pyxrt API differences --------------
+    def _wait_bounded(self, run, label, timeout_s=None):
+        timeout_s = timeout_s or self.run_timeout_s
+        t0 = time.monotonic()
+        try:
+            # Newer pyxrt: run.wait(timeout_ms) returns ert_cmd_state
+            return run.wait(int(timeout_s * 1000))
+        except TypeError:
+            # Older pyxrt: run.wait() takes no args and blocks indefinitely.
+            # Poll run.state() instead so we can bail out after timeout_s.
+            while time.monotonic() - t0 < timeout_s:
+                try:
+                    state = run.state()
+                    s = str(state).upper()
+                    if "RUNNING" not in s and "QUEUED" not in s and "NEW" not in s:
+                        return state
+                except Exception:
+                    pass
+                time.sleep(0.05)
+            raise TimeoutError(
+                f"{label} did not complete within {timeout_s}s -- likely a stalled "
+                f"CU. Check `dmesg | tail -50` for 'Critical temperature or power "
+                f"event' / 'Card requires pci hot reset'. If present, this needs "
+                f"an admin-level PCIe hot reset, not a script retry."
+            )
+
     def execute(self, image):
         ibuf_folded = self.fold_input(image.astype(np.uint8), ind=0)
         ibuf_packed = self.pack_input(ibuf_folded, ind=0)
         ibuf_packed = np.ascontiguousarray(ibuf_packed, dtype=np.uint8)
 
-        ibuf_bo = self.alloc_bo(ibuf_packed.size)
-        self.copy_to_bo(ibuf_bo, ibuf_packed)
+        try:
+            self.copy_to_bo(self._ibuf_bo, ibuf_packed)
 
-        out_packed_sizes = [
-            int(np.prod(self.oshape_packed(i)))
-            for i in range(self.io_shape_dict["num_outputs"])
-        ]
-        obuf_bos = [self.alloc_bo(size) for size in out_packed_sizes]
+            print("Starting output DMA(s)")
+            fpga_t0 = time.perf_counter()
+            output_runs = [
+                kernel(bo, 1) for kernel, bo in zip(self.odma_kernels, self._obuf_bos)
+            ]
 
-        print("Starting output DMA(s)")
-        output_runs = [kernel(bo, 1) for kernel, bo in zip(self.odma_kernels, obuf_bos)]
+            print("Starting input DMA")
+            input_run = self.idma0(self._ibuf_bo, 1)
 
-        print("Starting input DMA")
-        input_run = self.idma0(ibuf_bo, 1)
+            print("Waiting")
+            self._wait_bounded(input_run, "input DMA")
+            for i, run in enumerate(output_runs):
+                self._wait_bounded(run, f"output DMA {i}")
 
-        print("Waiting")
-        input_run.wait()
-        for run in output_runs:
-            run.wait()
+            fpga_t1 = time.perf_counter()
+            self.last_fpga_latency_ms = (fpga_t1 - fpga_t0) * 1000.0
 
-        print("Inference done")
+            print("Inference done")
+            print(f"FPGA latency: {self.last_fpga_latency_ms:.3f} ms")
+
+        except TimeoutError as e:
+            print(f"ERROR: {e}")
+            print(
+                "This process will exit without touching the device further. "
+                "Retrying immediately will likely just fail to (re)program the "
+                "xclbin if the card is in a thermal/power protection state."
+            )
+            raise
+        except Exception:
+            print("ERROR during execute() -- releasing device handles before re-raising")
+            self.close()
+            raise
 
         outputs = []
-        for idx, (bo, out_packed_size) in enumerate(zip(obuf_bos, out_packed_sizes)):
+        for idx, (bo, out_packed_size) in enumerate(zip(self._obuf_bos, self._out_packed_sizes)):
             raw = self.copy_from_bo(bo, out_packed_size)
             packed = raw.reshape(self.oshape_packed(idx))
             folded = self.unpack_output(packed, ind=idx)
@@ -350,9 +445,9 @@ def preprocess(img: np.ndarray, imgsz: int):
 
 
 def parse_args():
-    p = argparse.ArgumentParser(description="pyxrt FINN inference for YOLOv8-OBB (pure NumPy)")
+    p = argparse.ArgumentParser(description="pyxrt FINN inference for YOLOv8-OBB (single image, pure NumPy)")
     p.add_argument("--xclbin", default="finn-accel.xclbin", help="Path to the compiled xclbin")
-    p.add_argument("--source", type=str, required=True, help="Image file or directory")
+    p.add_argument("--source", type=str, required=True, help="Path to a single image file")
     p.add_argument("--scale-dir", type=str, default=".", help="Directory with mul_0..5.npy / add_0..5.npy")
     p.add_argument("--data", type=str, default="", help="Data YAML for class names (optional)")
     p.add_argument("--nc", type=int, default=1, help="Number of classes")
@@ -360,7 +455,7 @@ def parse_args():
     p.add_argument("--conf", type=float, default=0.20, help="Confidence threshold")
     p.add_argument("--iou", type=float, default=0.45)
     p.add_argument("--reg-max", type=int, default=REG_MAX, help="DFL reg_max (default 16)")
-    p.add_argument("--save", action="store_true", help="Save annotated images")
+    p.add_argument("--save", action="store_true", help="Save annotated image")
     p.add_argument("--show", action="store_true", help="Show result in window")
     p.add_argument("--project", type=str, default="runs/yolov8-obb")
     p.add_argument("--name", type=str, default="predict_fpga")
@@ -376,19 +471,21 @@ def parse_args():
         default=None,
         help="Output kernel names in the xclbin (6 required, in odma0..odma5 order)",
     )
+    p.add_argument(
+        "--run-timeout",
+        type=float,
+        default=15.0,
+        help="Seconds to wait for each DMA run before raising a TimeoutError (default 15s)",
+    )
     return p.parse_args()
 
 
 def main():
     args = parse_args()
 
-    finn = FINNXRT(
-        args.xclbin,
-        io_shape_dict=io_shape_dict,
-        input_kernel_name=args.input_kernel,
-        output_kernel_names=args.output_kernels,
-        device_id=args.device_id,
-    )
+    path = Path(args.source)
+    if not path.exists() or not path.is_file():
+        raise FileNotFoundError(f"No image found at {args.source}")
 
     nc = args.nc
     reg_max = args.reg_max
@@ -398,32 +495,32 @@ def main():
     print("Loading scales")
     muls, adds = load_scales(args.scale_dir)
 
-    source = Path(args.source)
-    if source.is_dir():
-        files = list(source.rglob("*.*"))
-        files = [f for f in files if f.suffix.lower() in (".jpg", ".jpeg", ".png", ".bmp", ".webp")]
-    else:
-        files = [source] if source.exists() else []
+    print(f"\nProcessing {path}")
+    img = cv2.imread(str(path))
+    if img is None:
+        raise ValueError(f"Failed to read image: {path}")
+    h0, w0 = img.shape[:2]
 
-    if not files:
-        raise FileNotFoundError(f"No images found at {args.source}")
+    # `with` guarantees device/kernel handles are released even if execute()
+    # raises (e.g. a TimeoutError from a stalled/thermally-tripped CU).
+    with FINNXRT(
+        args.xclbin,
+        io_shape_dict=io_shape_dict,
+        input_kernel_name=args.input_kernel,
+        output_kernel_names=args.output_kernels,
+        device_id=args.device_id,
+        run_timeout_s=args.run_timeout,
+    ) as finn:
 
-    save_dir = Path(args.project) / args.name
-    if args.save:
-        save_dir.mkdir(parents=True, exist_ok=True)
-        print(f"Saving to {save_dir}")
-
-    for path in files:
-        print(f"\nProcessing {path}")
-        img = cv2.imread(str(path))
-        if img is None:
-            continue
-        h0, w0 = img.shape[:2]
+        # -----------------------------------------------------
+        # End-to-end timer starts here (preprocess -> FPGA -> decode -> NMS)
+        # -----------------------------------------------------
+        e2e_t0 = time.perf_counter()
 
         driver_in, r, (dw, dh) = preprocess(img, imgsz)
 
         # -----------------------------------------------------
-        # Run inference on FPGA
+        # Run inference on FPGA (FPGA-only latency measured inside finn.execute)
         # -----------------------------------------------------
         raw_outputs = finn.execute(driver_in)
 
@@ -435,6 +532,17 @@ def main():
         # -----------------------------------------------------
         pred = outputs_to_prediction(box_outputs, angle_outputs, imgsz=imgsz, nc=nc, reg_max=reg_max)
         pred = non_max_suppression(pred, conf_thres=args.conf, iou_thres=args.iou, nc=nc)[0]
+
+        # -----------------------------------------------------
+        # End-to-end timer stops here: detection bounding boxes are ready
+        # -----------------------------------------------------
+        e2e_t1 = time.perf_counter()
+        end2end_latency_ms = (e2e_t1 - e2e_t0) * 1000.0
+
+        print("\n=== Latency ===")
+        print(f"FPGA-only latency:  {finn.last_fpga_latency_ms:.3f} ms")
+        print(f"End-to-end latency: {end2end_latency_ms:.3f} ms  "
+              f"(preprocess + FPGA + dequant + decode + NMS)")
 
         if len(pred):
             pred[:, :4] = scale_boxes(
@@ -461,16 +569,17 @@ def main():
             print("No detections")
 
         if args.save:
+            save_dir = Path(args.project) / args.name
+            save_dir.mkdir(parents=True, exist_ok=True)
             out_path = save_dir / path.name
             cv2.imwrite(str(out_path), img)
             print(f"Saved annotated image to {out_path}")
 
         if args.show:
             cv2.imshow(str(path), img)
-            cv2.waitKey(0 if len(files) == 1 else 1)
+            cv2.waitKey(0)
+            cv2.destroyAllWindows()
 
-    if args.show:
-        cv2.destroyAllWindows()
     print("\nDone.")
 
 
