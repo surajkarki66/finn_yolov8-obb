@@ -1,18 +1,25 @@
 import argparse
 import glob
 import os
+import time
 
 import cv2
 import numpy as np
 import pyxrt
 
-from qonnx.core.datatype import DataType
-from finn.util.data_packing import (
+from finn_scripts.evaluation.obb.qonnx.core.datatype import DataType
+from finn_scripts.evaluation.obb.finn.util.data_packing import (
     finnpy_to_packed_bytearray,
     packed_bytearray_to_finnpy,
 )
 
 from utils import letterbox
+
+try:
+    from tqdm import tqdm
+    HAVE_TQDM = True
+except ImportError:
+    HAVE_TQDM = False
 
 io_shape_dict = {
     # FINN DataType for input and output tensors
@@ -25,24 +32,24 @@ io_shape_dict = {
     # shapes for input and output tensors (NHWC layout)
     "ishape_normal": [(1, 416, 416, 3)],
     "oshape_normal": [
-        (1, 52, 52, 1), (1, 52, 52, 84),
-        (1, 26, 26, 1), (1, 26, 26, 84),
-        (1, 13, 13, 1), (1, 13, 13, 84),
+        (1, 52, 52, 1), (1, 52, 52, 65),
+        (1, 26, 26, 1), (1, 26, 26, 65),
+        (1, 13, 13, 1), (1, 13, 13, 65),
     ],
     # folded / packed shapes below depend on idt/odt and input/output
     # PE/SIMD parallelization settings -- these are calculated by the
     # FINN compiler.
     "ishape_folded": [(1, 416, 416, 3, 1)],
     "oshape_folded": [
-        (1, 52, 52, 1, 1), (1, 52, 52, 84, 1),
-        (1, 26, 26, 1, 1), (1, 26, 26, 84, 1),
-        (1, 13, 13, 1, 1), (1, 13, 13, 84, 1),
+        (1, 52, 52, 1, 1), (1, 52, 52, 65, 1),
+        (1, 26, 26, 1, 1), (1, 26, 26, 65, 1),
+        (1, 13, 13, 1, 1), (1, 13, 13, 65, 1),
     ],
     "ishape_packed": [(1, 416, 416, 3, 1)],
     "oshape_packed": [
-        (1, 52, 52, 1, 2), (1, 52, 52, 84, 2),
-        (1, 26, 26, 1, 2), (1, 26, 26, 84, 2),
-        (1, 13, 13, 1, 2), (1, 13, 13, 84, 2),
+        (1, 52, 52, 1, 2), (1, 52, 52, 65, 2),
+        (1, 26, 26, 1, 2), (1, 26, 26, 65, 2),
+        (1, 13, 13, 1, 2), (1, 13, 13, 65, 2),
     ],
     "input_dma_name": ['idma0'],
     "output_dma_name": ['odma0', 'odma1', 'odma2', 'odma3', 'odma4', 'odma5'],
@@ -72,7 +79,6 @@ class FINNXRT:
         device_id=0,
     ):
         if output_kernel_names is None:
-            # xclbinutil reports odma0..odma5 as StreamingDataflowPartition_2..7.
             output_kernel_names = [
                 "StreamingDataflowPartition_2",
                 "StreamingDataflowPartition_3",
@@ -97,6 +103,20 @@ class FINNXRT:
         self.odma_kernels = [
             pyxrt.kernel(self.device, self.uuid, kernel_name)
             for kernel_name in self.output_kernel_names
+        ]
+
+        # --- Allocate all buffer objects ONCE and reuse them for every image ---
+        print("Pre-allocating buffer objects")
+        ishape_packed_size = int(np.prod(self.ishape_packed(0)))
+        self.ibuf_bo = self.alloc_bo(ishape_packed_size, self.idma0, 0)
+
+        self.out_packed_sizes = [
+            int(np.prod(self.oshape_packed(i)))
+            for i in range(self.io_shape_dict["num_outputs"])
+        ]
+        self.obuf_bos = [
+            self.alloc_bo(size, self.odma_kernels[i], 0)
+            for i, size in enumerate(self.out_packed_sizes)
         ]
 
         print("FINN accelerator ready")
@@ -167,43 +187,52 @@ class FINNXRT:
     def unfold_output(self, obuf_folded, ind=0):
         return obuf_folded.reshape(self.oshape_normal(ind))
 
-    def execute(self, image):
+    def execute(self, image, verbose=True, timing=None):
+        def log(msg):
+            if verbose:
+                print(msg)
+
+        t0 = time.time()
         ibuf_folded = self.fold_input(image.astype(np.uint8), ind=0)
         ibuf_packed = self.pack_input(ibuf_folded, ind=0)
         ibuf_packed = np.ascontiguousarray(ibuf_packed, dtype=np.uint8)
+        t_prep = time.time()
 
-        ibuf_bo = self.alloc_bo(ibuf_packed.size, self.idma0, 0)
-        self.copy_to_bo(ibuf_bo, ibuf_packed)
+        # Reuse the pre-allocated input BO instead of allocating a new one
+        self.copy_to_bo(self.ibuf_bo, ibuf_packed)
+        t_alloc = time.time()
 
-        out_packed_sizes = [
-            int(np.prod(self.oshape_packed(i)))
-            for i in range(self.io_shape_dict["num_outputs"])
-        ]
-        obuf_bos = [
-            self.alloc_bo(size, self.odma_kernels[i], 0)
-            for i, size in enumerate(out_packed_sizes)
+        log("Starting output DMA(s)")
+        output_runs = [
+            kernel(bo, 1) for kernel, bo in zip(self.odma_kernels, self.obuf_bos)
         ]
 
-        print("Starting output DMA(s)")
-        output_runs = [kernel(bo, 1) for kernel, bo in zip(self.odma_kernels, obuf_bos)]
+        log("Starting input DMA")
+        input_run = self.idma0(self.ibuf_bo, 1)
 
-        print("Starting input DMA")
-        input_run = self.idma0(ibuf_bo, 1)
-
-        print("Waiting")
+        log("Waiting")
         input_run.wait()
         for run in output_runs:
             run.wait()
+        t_exec = time.time()
 
-        print("Inference done")
+        log("Inference done")
 
         outputs = []
-        for idx, (bo, out_packed_size) in enumerate(zip(obuf_bos, out_packed_sizes)):
+        for idx, (bo, out_packed_size) in enumerate(zip(self.obuf_bos, self.out_packed_sizes)):
             raw = self.copy_from_bo(bo, out_packed_size)
             packed = raw.reshape(self.oshape_packed(idx))
             folded = self.unpack_output(packed, ind=idx)
             normal = self.unfold_output(folded, ind=idx)
             outputs.append(normal)
+        t_post = time.time()
+
+        if timing is not None:
+            timing["prep_s"] = t_prep - t0
+            timing["alloc_s"] = t_alloc - t_prep
+            timing["exec_s"] = t_exec - t_alloc
+            timing["postproc_s"] = t_post - t_exec
+            timing["total_s"] = t_post - t0
 
         return outputs
 
@@ -250,7 +279,6 @@ def save_raw_outputs(
     save_dict["pad"] = np.array(pad)                 # (dw, dh)
 
     np.savez(out_path, **save_dict)
-    print(f"Saved raw FPGA outputs to {out_path}")
 
 
 if __name__ == "__main__":
@@ -284,6 +312,12 @@ if __name__ == "__main__":
         default="raw_outputs",
         help="Directory to save per-image .npz raw output files",
     )
+    parser.add_argument(
+        "--quiet-per-image",
+        action="store_true",
+        help="Suppress the per-DMA 'Starting output DMA(s)/Waiting/Inference done' prints "
+             "(keeps the progress bar clean on large batches)",
+    )
     args = parser.parse_args()
 
     image_paths = list_images(args.data_dir)
@@ -301,31 +335,113 @@ if __name__ == "__main__":
 
     img_size = (416, 416)
 
-    for i, image_path in enumerate(image_paths):
-        print(f"\n[{i + 1}/{len(image_paths)}] Processing {image_path}")
+    n_total = len(image_paths)
+    n_ok = 0
+    failures = []  # list of (image_path, exception_str)
+    exec_times = []  # per-image "exec_s" (device compute time, excludes host pre/post)
+    total_times = []  # per-image total wall time including pre/post-processing
 
-        driver_in, img_org, ratio, pad = preprocess_image(image_path, img_size)
-
-        outputs = finn.execute(driver_in)
-
-        # Sanity check: confirm shapes match expected oshape_normal
-        for idx, out in enumerate(outputs):
-            expected = io_shape_dict["oshape_normal"][idx]
-            assert out.shape == expected, (
-                f"Output {idx} shape mismatch: got {out.shape}, expected {expected}"
-            )
-
-        img_stem = os.path.splitext(os.path.basename(image_path))[0]
-        out_path = os.path.join(args.raw_output_dir, f"{img_stem}_raw.npz")
-
-        save_raw_outputs(
-            outputs,
-            io_shape_dict,
-            image_path,
-            out_path,
-            orig_shape=img_org.shape,
-            ratio=ratio,
-            pad=pad,
+    iterator = enumerate(image_paths)
+    if HAVE_TQDM:
+        pbar = tqdm(total=n_total, unit="img", dynamic_ncols=True)
+    else:
+        pbar = None
+        print(
+            "tqdm not installed -- falling back to plain prints for progress. "
+            "Install with `pip install tqdm` for a live progress bar."
         )
 
-    print(f"\nDone. Saved {len(image_paths)} raw output file(s) to {args.raw_output_dir}")
+    run_start = time.time()
+
+    for i, image_path in iterator:
+        if pbar is None:
+            print(f"\n[{i + 1}/{n_total}] Processing {image_path}")
+        else:
+            pbar.set_description(os.path.basename(image_path)[:30])
+
+        try:
+            img_t0 = time.time()
+            driver_in, img_org, ratio, pad = preprocess_image(image_path, img_size)
+
+            timing = {}
+            outputs = finn.execute(
+                driver_in, verbose=not args.quiet_per_image, timing=timing
+            )
+
+            # Sanity check: confirm shapes match expected oshape_normal
+            for idx, out in enumerate(outputs):
+                expected = io_shape_dict["oshape_normal"][idx]
+                assert out.shape == expected, (
+                    f"Output {idx} shape mismatch: got {out.shape}, expected {expected}"
+                )
+
+            img_stem = os.path.splitext(os.path.basename(image_path))[0]
+            out_path = os.path.join(args.raw_output_dir, f"{img_stem}_raw.npz")
+
+            save_raw_outputs(
+                outputs,
+                io_shape_dict,
+                image_path,
+                out_path,
+                orig_shape=img_org.shape,
+                ratio=ratio,
+                pad=pad,
+            )
+
+            img_total = time.time() - img_t0
+            n_ok += 1
+            exec_times.append(timing["exec_s"])
+            total_times.append(img_total)
+
+            if pbar is not None:
+                running_avg = sum(total_times) / len(total_times)
+                fps = 1.0 / running_avg if running_avg > 0 else float("nan")
+                pbar.set_postfix(
+                    ok=n_ok,
+                    fail=len(failures),
+                    fps=f"{fps:.2f}",
+                    dev_ms=f"{timing['exec_s'] * 1000:.1f}",
+                )
+            else:
+                print(
+                    f"  done in {img_total * 1000:.1f} ms "
+                    f"(device: {timing['exec_s'] * 1000:.1f} ms) -> {out_path}"
+                )
+
+        except Exception as e:
+            failures.append((image_path, str(e)))
+            if pbar is not None:
+                pbar.set_postfix(ok=n_ok, fail=len(failures))
+                pbar.write(f"[FAILED] {image_path}: {e}")
+            else:
+                print(f"  [FAILED] {image_path}: {e}")
+            continue
+
+        finally:
+            if pbar is not None:
+                pbar.update(1)
+
+    if pbar is not None:
+        pbar.close()
+
+    run_total = time.time() - run_start
+
+    print("\n" + "=" * 60)
+    print("Run summary")
+    print("=" * 60)
+    print(f"Images found:     {n_total}")
+    print(f"Succeeded:        {n_ok}")
+    print(f"Failed:           {len(failures)}")
+    print(f"Wall time:        {run_total:.2f} s")
+    if total_times:
+        avg_total = sum(total_times) / len(total_times)
+        avg_exec = sum(exec_times) / len(exec_times)
+        print(f"Avg time/image:   {avg_total * 1000:.1f} ms (host+device)")
+        print(f"Avg device time:  {avg_exec * 1000:.1f} ms (accelerator only)")
+        print(f"Throughput:       {1.0 / avg_total:.2f} img/s (end-to-end)")
+    if failures:
+        print("\nFailed images:")
+        for path, err in failures:
+            print(f"  - {path}: {err}")
+    print(f"\nSaved {n_ok} raw output file(s) to {args.raw_output_dir}")
+

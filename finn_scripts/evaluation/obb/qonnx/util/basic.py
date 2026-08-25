@@ -30,7 +30,7 @@ import random
 import string
 import warnings
 
-from qonnx.core.datatype import DataType
+from finn_scripts.evaluation.obb.qonnx.core.datatype import DataType
 
 try:
     from onnx.helper import make_model, make_opsetid

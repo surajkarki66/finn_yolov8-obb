@@ -32,8 +32,8 @@ import numpy as np
 import os
 import sys
 from bitstring import BitArray
-from qonnx.core.datatype import DataType
-from qonnx.util.basic import gen_finn_dt_tensor, roundup_to_integer_multiple
+from finn_scripts.evaluation.obb.qonnx.core.datatype import DataType
+from finn_scripts.evaluation.obb.qonnx.util.basic import gen_finn_dt_tensor, roundup_to_integer_multiple
 from typing import Dict
 
 
