@@ -44,3 +44,7 @@
 #python3 val.py --weights runs/yolov8-obb/train/best.pt --cfg configs/models/yolov8-obb.yaml --data data/PMOF+CEPDOF+HABOF_416/data.yaml --batch 32 --imgsz 416 --save-json --project runs/yolov8-obb_finetune_pmof+cepdof+habof
 #python3 val.py --weights runs/yolov8-obb-quant-4w4a_finetune/train/best.pt --cfg configs/models/quant/quantyolov8_obb_4w4a_common_act.yaml --data data/PMOF+CEPDOF+HABOF_416/data.yaml --batch 32 --imgsz 416 --save-json --project runs/yolov8-obb-quant-4w4a_finetune_pmof+cepdof+habof
 
+# loaf
+#python3 val.py --weights runs/yolov8-obb/train/best.pt --cfg configs/models/yolov8-obb.yaml --data data/loaf/data.yaml --batch 32 --imgsz 416 --save-json --project runs/yolov8-obb
+python3 val.py --weights runs/yolov8-obb-quant-4w4a/train/best.pt --cfg configs/models/quant/quantyolov8_obb_4w4a_common_act.yaml --data data/loaf/data.yaml --batch 32 --imgsz 416 --save-json --project runs/yolov8-obb-quant-4w4a_finetune_loaf
+
